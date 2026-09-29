@@ -30,6 +30,8 @@ export const SellerOverviewPage: React.FC = () => {
   const [balance, setBalance] = useState<SellerBalance | null>(null);
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [withdrawing, setWithdrawing] = useState(false);
+  const [withdrawNotice, setWithdrawNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -78,6 +80,26 @@ export const SellerOverviewPage: React.FC = () => {
   const validOrdersCount = orders.filter((o) => o.status !== 'CANCELLED').length;
   const availableBal = balance?.available_amount || 0;
   const pendingBal = balance?.pending_amount || 0;
+
+  const handleWithdraw = async () => {
+    if (!currentUser || availableBal <= 0) return;
+    setWithdrawing(true);
+    setWithdrawNotice(null);
+    try {
+      await marketplaceService.requestWithdrawal(currentUser.uid, availableBal);
+      const [updatedBal, updatedLedger] = await Promise.all([
+        marketplaceService.getSellerBalance(currentUser.uid),
+        marketplaceService.getSellerLedger(currentUser.uid)
+      ]);
+      setBalance(updatedBal);
+      setLedger(updatedLedger);
+      setWithdrawNotice(`Withdrawal of ${formatPrice(availableBal)} successfully submitted to your payout method.`);
+    } catch (err: any) {
+      setWithdrawNotice(err.message || 'Failed to submit withdrawal request.');
+    } finally {
+      setWithdrawing(false);
+    }
+  };
 
   return (
     <div className="space-y-8">
@@ -251,12 +273,20 @@ export const SellerOverviewPage: React.FC = () => {
               </div>
             </div>
 
+            {withdrawNotice && (
+              <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 flex items-start gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                <span>{withdrawNotice}</span>
+              </div>
+            )}
+
             <Button
               variant="outline"
               size="md"
               disabled={availableBal <= 0}
+              isLoading={withdrawing}
               className="w-full"
-              onClick={() => alert(`Withdrawal request of ${formatPrice(availableBal)} submitted to your verified bank account.`)}
+              onClick={handleWithdraw}
             >
               {availableBal > 0 ? `Withdraw ${formatPrice(availableBal)}` : 'No funds to withdraw'}
             </Button>

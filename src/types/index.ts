@@ -106,6 +106,57 @@ export interface Product {
   updated_at: string;
 }
 
+// Strict Seller DTO for Mass-Assignment Prevention
+export interface SellerProductCreateInput {
+  store_id: string;
+  seller_id: string;
+  category_id: string;
+  title: string;
+  slug?: string;
+  description: string;
+  brand?: string;
+  condition: ProductCondition;
+  status: ProductStatus;
+  price: number;
+  compare_at_price?: number;
+  currency?: string;
+  stock: number;
+  images: string[];
+  variants?: ProductVariant[];
+  specifications?: Record<string, string>;
+  dimensions?: string;
+  weight?: string;
+  shipping_method?: string;
+  published_at?: string;
+}
+
+export interface SellerProductUpdateInput {
+  title?: string;
+  description?: string;
+  category_id?: string;
+  brand?: string;
+  condition?: ProductCondition;
+  price?: number;
+  compare_at_price?: number;
+  stock?: number;
+  images?: string[];
+  variants?: ProductVariant[];
+  specifications?: Record<string, string>;
+  dimensions?: string;
+  weight?: string;
+  shipping_method?: string;
+  status?: ProductStatus;
+}
+
+export interface SellerStoreUpdateInput {
+  name?: string;
+  description?: string;
+  logo_url?: string;
+  cover_url?: string;
+  shipping_policies?: string;
+  return_policies?: string;
+}
+
 export interface CartItem {
   productId: string;
   variantId?: string;

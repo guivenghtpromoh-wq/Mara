@@ -54,17 +54,17 @@ export const HomePage: React.FC = () => {
 
   return (
     <div className="space-y-12 sm:space-y-16">
-      {/* 2. Hero Section */}
-      <section className="relative overflow-hidden rounded-3xl bg-[#101312] text-white p-6 sm:p-12 lg:p-16 border border-[#181B19] shadow-xs">
+      {/* 2. Hero Section: Light on mobile, signature dark on web model */}
+      <section className="relative overflow-hidden rounded-3xl bg-white md:bg-[#101312] text-[#101312] md:text-white p-6 sm:p-12 lg:p-16 border border-[#E2E4DF] md:border-[#181B19] shadow-xs">
         <div className="relative z-10 max-w-2xl space-y-4">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 text-white text-xs font-semibold backdrop-blur-xs border border-white/15">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#F7F7F3] md:bg-white/10 text-[#101312] md:text-white text-xs font-semibold backdrop-blur-xs border border-[#E2E4DF] md:border-white/15">
             <span className="w-2 h-2 rounded-full bg-[#F4C430]" />
             MARA Marketplace
           </div>
-          <h1 className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight text-white leading-[1.15]">
+          <h1 className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight text-[#101312] md:text-white leading-[1.15]">
             {t('home.hero.title')}
           </h1>
-          <p className="text-sm sm:text-base text-[#E2E4DF]/80 leading-relaxed max-w-lg">
+          <p className="text-sm sm:text-base text-[#6E746F] md:text-[#E2E4DF]/80 leading-relaxed max-w-lg">
             {t('home.hero.subtitle')}
           </p>
           <div className="pt-2 flex flex-wrap items-center gap-3">
@@ -75,15 +75,19 @@ export const HomePage: React.FC = () => {
               </Button>
             </Link>
             <Link to="/sell">
-              <Button variant="outline" size="lg" className="border-white/30 text-white bg-white/10 hover:bg-white/20">
+              <Button
+                variant="outline"
+                size="lg"
+                className="border-[#E2E4DF] text-[#101312] bg-[#F7F7F3] hover:bg-[#E2E4DF]/60 md:border-white/30 md:text-white md:bg-white/10 md:hover:bg-white/20"
+              >
                 <span>Become a seller</span>
               </Button>
             </Link>
           </div>
         </div>
 
-        {/* Subtle decorative background gradient */}
-        <div className="absolute right-0 top-0 bottom-0 w-1/2 opacity-20 pointer-events-none bg-gradient-to-l from-[#F4C430] to-transparent blur-3xl" />
+        {/* Subtle decorative background gradient on web */}
+        <div className="hidden md:block absolute right-0 top-0 bottom-0 w-1/2 opacity-20 pointer-events-none bg-gradient-to-l from-[#F4C430] to-transparent blur-3xl" />
       </section>
 
       {/* 3. Categories */}

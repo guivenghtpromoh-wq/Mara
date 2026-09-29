@@ -15,7 +15,7 @@ export const BuyerFooter: React.FC = () => {
   const currentYear = new Date().getFullYear();
 
   return (
-    <footer className="w-full bg-[#181B19] text-[#E2E4DF] border-t border-[#E2E4DF]/20 pt-12 pb-24 md:pb-12">
+    <footer className="hidden md:block w-full bg-[#181B19] text-[#E2E4DF] border-t border-[#E2E4DF]/20 pt-12 pb-12">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="grid grid-cols-1 md:grid-cols-5 gap-8 pb-10 border-b border-[#E2E4DF]/15">
           {/* Brand & Mission */}

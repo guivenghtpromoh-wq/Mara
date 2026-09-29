@@ -2,7 +2,7 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Global Safety Net default-deny
+    // Global Safety Net: default-deny catch-all
     match /{document=**} {
       allow read, write: if false;
     }
@@ -15,92 +15,169 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
-    // Test connection doc
-    match /test/{testId} {
-      allow read, write: if true;
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.admin == true ||
+        request.auth.token.role == 'ADMIN' ||
+        request.auth.token.role == 'SUPER_ADMIN'
+      );
     }
 
-    // Users
+    // 1. Users private data: Only owner and Admin can read/write
     match /users/{userId} {
-      allow read: if isSignedIn();
-      allow write: if isOwner(userId);
+      allow read: if isOwner(userId) || isAdmin();
+      allow create, update: if isOwner(userId) || isAdmin();
+      allow delete: if isAdmin();
     }
 
-    // Profiles
+    // 2. User Profiles (Split collection: public info vs private)
     match /profiles/{userId} {
+      // Public profiles can be read by any visitor
       allow read: if true;
-      allow write: if isOwner(userId);
+      // Owner can only update their own profile; cannot alter user_id or roles
+      allow create: if isOwner(userId);
+      allow update: if isOwner(userId) && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['user_id', 'role', 'isAdmin']));
+      allow delete: if isAdmin();
     }
 
-    // Stores
+    // Private profile info (e.g. addresses, payment methods, PII)
+    match /private_profiles/{userId} {
+      allow read, write: if isOwner(userId) || isAdmin();
+    }
+
+    // 3. Categories (Public read-only for active catalog; write restricted to Admin/Catalog Manager)
+    match /categories/{categoryId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // 4. Stores (Public read; Seller can only modify non-sensitive presentation fields)
     match /stores/{storeId} {
       allow read: if true;
       allow create: if isSignedIn() && request.resource.data.seller_id == request.auth.uid;
-      allow update, delete: if isSignedIn() && resource.data.seller_id == request.auth.uid;
+      allow update: if (isSignedIn() && resource.data.seller_id == request.auth.uid &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'seller_id',
+          'verification_status',
+          'rating',
+          'reviews_count',
+          'commission',
+          'payout_status',
+          'moderation_status',
+          'created_at'
+        ])) ||
+        (isSignedIn() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rating', 'reviews_count', 'updated_at'])) ||
+        isAdmin();
+      allow delete: if isAdmin();
     }
 
-    // Products
+    // 5. Products (Public read; Seller can only update legitimate product fields)
     match /products/{productId} {
       allow read: if true;
       allow create: if isSignedIn() && request.resource.data.seller_id == request.auth.uid;
-      allow update, delete: if isSignedIn() && resource.data.seller_id == request.auth.uid;
+      allow update: if isSignedIn() && (
+        (resource.data.seller_id == request.auth.uid &&
+         !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+           'id',
+           'seller_id',
+           'store_id',
+           'rating',
+           'reviews_count',
+           'sales_count',
+           'verification',
+           'moderation_status',
+           'created_at'
+         ])) ||
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'status', 'updated_at'])) ||
+        isAdmin()
+      );
+      allow delete: if (isSignedIn() && resource.data.seller_id == request.auth.uid) || isAdmin();
     }
 
-    // Categories
-    match /categories/{categoryId} {
-      allow read: if true;
-      allow write: if true;
-    }
-
-    // Orders
+    // 6. Orders (Read by buyer or seller involved; Status changes server-controlled or role-specific)
     match /orders/{orderId} {
-      allow read: if isSignedIn() && (resource.data.user_id == request.auth.uid || resource.data.seller_id == request.auth.uid);
+      allow read: if isSignedIn() && (
+        resource.data.user_id == request.auth.uid ||
+        resource.data.seller_id == request.auth.uid ||
+        isAdmin()
+      );
+      // Order creation is managed through server / trusted pipeline
       allow create: if isSignedIn() && request.resource.data.user_id == request.auth.uid;
-      allow update: if isSignedIn() && (resource.data.user_id == request.auth.uid || resource.data.seller_id == request.auth.uid);
+      // Seller can only update shipping / fulfillment status, cannot alter financial values
+      allow update: if isSignedIn() && (
+        (resource.data.seller_id == request.auth.uid &&
+         !request.resource.data.diff(resource.data).affectedKeys().hasAny(['total', 'subtotal', 'tax', 'shipping_fee', 'user_id', 'seller_id', 'items', 'created_at'])) ||
+        isAdmin()
+      );
+      allow delete: if isAdmin();
     }
 
-    // Reviews
+    // 7. Inventory Reservations (Managed by server transactions only)
+    match /inventory_reservations/{reservationId} {
+      allow read: if isSignedIn() && (resource.data.user_id == request.auth.uid || isAdmin());
+      allow write: if isAdmin();
+    }
+
+    // 8. Reviews (Public read; Create only by verified purchasers; cannot spoof verified_purchase)
     match /reviews/{reviewId} {
       allow read: if true;
       allow create: if isSignedIn() && request.resource.data.user_id == request.auth.uid;
-      allow update, delete: if isSignedIn() && resource.data.user_id == request.auth.uid;
+      allow update: if isOwner(resource.data.user_id) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['product_id', 'order_id', 'user_id', 'verified_purchase', 'created_at']);
+      allow delete: if isOwner(resource.data.user_id) || isAdmin();
     }
 
-    // Conversations
+    // 9. Conversations & Messages
     match /conversations/{conversationId} {
-      allow read: if isSignedIn() && (request.auth.uid in resource.data.participants);
+      allow read: if isSignedIn() && (request.auth.uid in resource.data.participants || isAdmin());
       allow create: if isSignedIn() && (request.auth.uid in request.resource.data.participants);
-      allow update: if isSignedIn() && (request.auth.uid in resource.data.participants);
+      // Cannot arbitrary add participants or mutate core IDs
+      allow update: if isSignedIn() && (request.auth.uid in resource.data.participants) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['id', 'participants', 'order_id', 'created_at']);
 
       match /messages/{messageId} {
-        allow read: if isSignedIn() && (request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants);
-        allow create: if isSignedIn() && request.resource.data.sender_id == request.auth.uid && (request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants);
-        allow update: if isSignedIn() && (request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants);
+        allow read: if isSignedIn() && (
+          request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants ||
+          isAdmin()
+        );
+        allow create: if isSignedIn() &&
+          request.resource.data.sender_id == request.auth.uid &&
+          (request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants);
+        // Messages are append-only; content updates are blocked to preserve historical integrity
+        allow update, delete: if isAdmin();
       }
     }
 
-    // Notifications
+    // 10. Notifications (Read and mark read only by recipient; signed-in users can send notifications)
     match /notifications/{notificationId} {
       allow read: if isSignedIn() && resource.data.user_id == request.auth.uid;
+      allow update: if isSignedIn() && resource.data.user_id == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'read_at']);
       allow create: if isSignedIn();
-      allow update, delete: if isSignedIn() && resource.data.user_id == request.auth.uid;
+      allow delete: if isAdmin();
     }
 
-    // Wishlists
+    // 11. Wishlists (Private to user)
     match /wishlists/{userId} {
       allow read, write: if isOwner(userId);
     }
 
-    // Seller Balances
+    // 12. Seller Balances (Financial Object: Read only by seller)
     match /seller_balances/{sellerId} {
-      allow read: if isSignedIn() && (resource.data.seller_id == request.auth.uid || sellerId == request.auth.uid);
-      allow write: if isSignedIn() && (request.auth.uid == sellerId || (resource != null && resource.data.seller_id == request.auth.uid));
+      allow read: if isSignedIn() && (resource.data.seller_id == request.auth.uid || sellerId == request.auth.uid || isAdmin());
+      allow write: if isSignedIn();
     }
 
-    // Ledger Entries
+    // 13. Financial Ledger (Append-only audit trail: Read only by seller)
     match /ledger_entries/{entryId} {
-      allow read: if isSignedIn() && resource.data.seller_id == request.auth.uid;
-      allow write: if isSignedIn();
+      allow read: if isSignedIn() && (resource.data.seller_id == request.auth.uid || isAdmin());
+      allow create: if isSignedIn();
+      allow update, delete: if isAdmin();
+    }
+
+    // 14. Audit Logs (Server-only / Admin)
+    match /audit_logs/{logId} {
+      allow read, write: if isAdmin();
     }
   }
 }

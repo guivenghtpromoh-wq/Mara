@@ -25,7 +25,10 @@ import {
   Notification,
   SellerBalance,
   LedgerEntry,
-  OrderStatus
+  OrderStatus,
+  SellerProductCreateInput,
+  SellerProductUpdateInput,
+  SellerStoreUpdateInput
 } from '../types';
 
 // Default initial category seeds if DB collection is completely empty
@@ -89,21 +92,43 @@ export const marketplaceService = {
   }): Promise<Product[]> {
     try {
       const colRef = collection(db, 'products');
-      const snap = await getDocs(colRef);
+      let q;
+
+      // Server-side filtering prioritized by specificity to avoid full table scans
+      const maxLimit = params?.limitCount && params.limitCount > 0 ? params.limitCount : 50;
+
+      if (params?.sellerId) {
+        q = query(colRef, where('seller_id', '==', params.sellerId), limit(maxLimit));
+      } else if (params?.storeId) {
+        q = query(colRef, where('store_id', '==', params.storeId), limit(maxLimit));
+      } else if (params?.categoryId) {
+        q = query(colRef, where('category_id', '==', params.categoryId), where('status', '==', 'ACTIVE'), limit(maxLimit));
+      } else if (params?.status) {
+        q = query(colRef, where('status', '==', params.status), limit(maxLimit));
+      } else {
+        // Public exploration defaults to active products with limit
+        q = query(colRef, where('status', '==', 'ACTIVE'), limit(maxLimit));
+      }
+
+      let snap;
+      try {
+        snap = await getDocs(q);
+      } catch (idxErr) {
+        // Fallback gracefully if composite index is pending
+        console.warn('Direct indexed query fallback:', idxErr);
+        snap = await getDocs(query(colRef, limit(maxLimit)));
+      }
+
       let list: Product[] = [];
       snap.forEach((d) => list.push({ id: d.id, ...d.data() } as Product));
 
-      // Client-side deterministic filtering and sorting
+      // In-memory refinement for optional search query, condition, and price range
       if (params?.sellerId) {
         list = list.filter((p) => p.seller_id === params.sellerId);
-      }
-      if (params?.storeId) {
-        list = list.filter((p) => p.store_id === params.storeId);
       }
       if (params?.status) {
         list = list.filter((p) => p.status === params.status);
       } else if (!params?.sellerId) {
-        // Public viewing only sees ACTIVE products
         list = list.filter((p) => p.status === 'ACTIVE');
       }
 
@@ -139,12 +164,7 @@ export const marketplaceService = {
       } else if (sort === 'price-desc') {
         list.sort((a, b) => b.price - a.price);
       } else {
-        // Default newest
         list.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-      }
-
-      if (params?.limitCount && params.limitCount > 0) {
-        list = list.slice(0, params.limitCount);
       }
 
       return list;
@@ -161,7 +181,8 @@ export const marketplaceService = {
       if (snap.empty) return null;
       return { id: snap.docs[0].id, ...snap.docs[0].data() } as Product;
     } catch (err) {
-      handleFirestoreError(err, OperationType.GET, `products/slug/${slug}`);
+      console.warn(`Could not fetch product by slug ${slug}:`, err);
+      return null;
     }
   },
 
@@ -171,23 +192,51 @@ export const marketplaceService = {
       if (!snap.exists()) return null;
       return { id: snap.id, ...snap.data() } as Product;
     } catch (err) {
-      handleFirestoreError(err, OperationType.GET, `products/${id}`);
+      console.warn(`Could not fetch product by id ${id}:`, err);
+      return null;
     }
   },
 
   async createProduct(
-    productData: Omit<Product, 'id' | 'created_at' | 'updated_at'>
+    input: SellerProductCreateInput
   ): Promise<Product> {
     try {
       const colRef = collection(db, 'products');
       const newDoc = doc(colRef);
       const now = new Date().toISOString();
+      
+      const slug = input.slug || input.title
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '') + `-${Date.now().toString().slice(-4)}`;
+
+      // Server-authoritative construction: protected fields are initialized strictly
       const product: Product = {
-        ...productData,
         id: newDoc.id,
+        store_id: input.store_id,
+        seller_id: input.seller_id,
+        category_id: input.category_id,
+        title: input.title.trim(),
+        slug,
+        description: input.description.trim(),
+        brand: input.brand?.trim() || undefined,
+        condition: input.condition || 'NEW',
+        status: input.status || 'ACTIVE',
+        price: Number(input.price),
+        compare_at_price: input.compare_at_price ? Number(input.compare_at_price) : undefined,
+        currency: input.currency || 'USD',
+        stock: Number(input.stock) || 0,
+        images: input.images && input.images.length > 0 ? input.images : [],
+        variants: input.variants || [],
+        specifications: input.specifications || {},
+        dimensions: input.dimensions || undefined,
+        weight: input.weight || undefined,
+        shipping_method: input.shipping_method || 'Standard Courier',
+        published_at: input.status === 'ACTIVE' ? now : undefined,
         created_at: now,
         updated_at: now,
       };
+
       await setDoc(newDoc, product);
       return product;
     } catch (err) {
@@ -195,7 +244,7 @@ export const marketplaceService = {
     }
   },
 
-  async updateProduct(id: string, updates: Partial<Product>, sellerId: string): Promise<void> {
+  async updateProduct(id: string, updates: SellerProductUpdateInput, sellerId: string): Promise<void> {
     try {
       const docRef = doc(db, 'products', id);
       const snap = await getDoc(docRef);
@@ -204,10 +253,29 @@ export const marketplaceService = {
       if (existing.seller_id !== sellerId) {
         throw new Error('Unauthorized: You can only edit your own products.');
       }
-      await updateDoc(docRef, {
-        ...updates,
+
+      // Mass Assignment Protection: strictly whitelist legitimate fields
+      const sanitized: Partial<Product> = {
         updated_at: new Date().toISOString()
-      });
+      };
+
+      if (updates.title !== undefined) sanitized.title = updates.title.trim();
+      if (updates.description !== undefined) sanitized.description = updates.description.trim();
+      if (updates.category_id !== undefined) sanitized.category_id = updates.category_id;
+      if (updates.brand !== undefined) sanitized.brand = updates.brand.trim() || undefined;
+      if (updates.condition !== undefined) sanitized.condition = updates.condition;
+      if (updates.price !== undefined) sanitized.price = Number(updates.price);
+      if (updates.compare_at_price !== undefined) sanitized.compare_at_price = updates.compare_at_price ? Number(updates.compare_at_price) : undefined;
+      if (updates.stock !== undefined) sanitized.stock = Number(updates.stock);
+      if (updates.images !== undefined) sanitized.images = updates.images;
+      if (updates.variants !== undefined) sanitized.variants = updates.variants;
+      if (updates.specifications !== undefined) sanitized.specifications = updates.specifications;
+      if (updates.dimensions !== undefined) sanitized.dimensions = updates.dimensions;
+      if (updates.weight !== undefined) sanitized.weight = updates.weight;
+      if (updates.shipping_method !== undefined) sanitized.shipping_method = updates.shipping_method;
+      if (updates.status !== undefined) sanitized.status = updates.status;
+
+      await updateDoc(docRef, sanitized);
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `products/${id}`);
     }
@@ -248,7 +316,8 @@ export const marketplaceService = {
       if (snap.empty) return null;
       return { id: snap.docs[0].id, ...snap.docs[0].data() } as Store;
     } catch (err) {
-      handleFirestoreError(err, OperationType.GET, `stores/slug/${slug}`);
+      console.warn(`Could not fetch store by slug ${slug}:`, err);
+      return null;
     }
   },
 
@@ -258,7 +327,8 @@ export const marketplaceService = {
       if (!snap.exists()) return null;
       return { id: snap.id, ...snap.data() } as Store;
     } catch (err) {
-      handleFirestoreError(err, OperationType.GET, `stores/${id}`);
+      console.warn(`Could not fetch store by id ${id}:`, err);
+      return null;
     }
   },
 
@@ -297,7 +367,7 @@ export const marketplaceService = {
     }
   },
 
-  async updateStore(id: string, updates: Partial<Store>, sellerId: string): Promise<void> {
+  async updateStore(id: string, updates: SellerStoreUpdateInput, sellerId: string): Promise<void> {
     try {
       const docRef = doc(db, 'stores', id);
       const snap = await getDoc(docRef);
@@ -306,10 +376,19 @@ export const marketplaceService = {
       if (existing.seller_id !== sellerId) {
         throw new Error('Unauthorized: You can only edit your own store.');
       }
-      await updateDoc(docRef, {
-        ...updates,
+
+      // Mass Assignment Protection: strictly whitelist legitimate store settings
+      const sanitized: Partial<Store> = {
         updated_at: new Date().toISOString()
-      });
+      };
+      if (updates.name !== undefined) sanitized.name = updates.name.trim();
+      if (updates.description !== undefined) sanitized.description = updates.description.trim();
+      if (updates.logo_url !== undefined) sanitized.logo_url = updates.logo_url;
+      if (updates.cover_url !== undefined) sanitized.cover_url = updates.cover_url;
+      if (updates.shipping_policies !== undefined) sanitized.shipping_policies = updates.shipping_policies;
+      if (updates.return_policies !== undefined) sanitized.return_policies = updates.return_policies;
+
+      await updateDoc(docRef, sanitized);
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `stores/${id}`);
     }
@@ -483,7 +562,8 @@ export const marketplaceService = {
       if (!snap.exists()) return null;
       return { id: snap.id, ...snap.data() } as Order;
     } catch (err) {
-      handleFirestoreError(err, OperationType.GET, `orders/${orderId}`);
+      console.warn(`Could not fetch order ${orderId}:`, err);
+      return null;
     }
   },
 
@@ -578,29 +658,32 @@ export const marketplaceService = {
       };
       await setDoc(newDoc, review);
 
-      // Recalculate product & store rating
-      const reviews = await this.getProductReviews(reviewData.product_id);
-      const totalRatings = reviews.reduce((sum, r) => sum + r.rating, 0);
-      const avgRating = Number((totalRatings / reviews.length).toFixed(1));
+      // Recalculate product & store rating asynchronously / safely
+      try {
+        const reviews = await this.getProductReviews(reviewData.product_id);
+        const totalRatings = reviews.reduce((sum, r) => sum + r.rating, 0);
+        const avgRating = reviews.length > 0 ? Number((totalRatings / reviews.length).toFixed(1)) : reviewData.rating;
 
-      const prodRef = doc(db, 'products', reviewData.product_id);
-      const prodSnap = await getDoc(prodRef);
-      if (prodSnap.exists()) {
-        const prod = prodSnap.data() as Product;
-        // Also update store rating
-        const storeRef = doc(db, 'stores', prod.store_id);
-        const storeSnap = await getDoc(storeRef);
-        if (storeSnap.exists()) {
-          const sData = storeSnap.data() as Store;
-          const newCount = (sData.reviews_count || 0) + 1;
-          const currentTotal = (sData.rating || 0) * (sData.reviews_count || 0);
-          const newAvg = Number(((currentTotal + reviewData.rating) / newCount).toFixed(1));
-          await updateDoc(storeRef, {
-            rating: newAvg,
-            reviews_count: newCount,
-            updated_at: now
-          });
+        const prodRef = doc(db, 'products', reviewData.product_id);
+        const prodSnap = await getDoc(prodRef);
+        if (prodSnap.exists()) {
+          const prod = prodSnap.data() as Product;
+          const storeRef = doc(db, 'stores', prod.store_id);
+          const storeSnap = await getDoc(storeRef);
+          if (storeSnap.exists()) {
+            const sData = storeSnap.data() as Store;
+            const newCount = (sData.reviews_count || 0) + 1;
+            const currentTotal = (sData.rating || 0) * (sData.reviews_count || 0);
+            const newAvg = Number(((currentTotal + reviewData.rating) / newCount).toFixed(1));
+            await updateDoc(storeRef, {
+              rating: newAvg,
+              reviews_count: newCount,
+              updated_at: now
+            });
+          }
         }
+      } catch (rateErr) {
+        console.warn('Deferred rating recalculation notice:', rateErr);
       }
 
       return review;
@@ -746,6 +829,55 @@ export const marketplaceService = {
       return entries.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     } catch (err) {
       handleFirestoreError(err, OperationType.LIST, 'ledger_entries');
+    }
+  },
+
+  async requestWithdrawal(sellerId: string, amount: number): Promise<void> {
+    try {
+      const balRef = doc(db, 'seller_balances', sellerId);
+      const snap = await getDoc(balRef);
+      if (!snap.exists()) throw new Error('Seller balance record not found.');
+      const bal = snap.data() as SellerBalance;
+      if ((bal.available_amount || 0) < amount || amount <= 0) {
+        throw new Error('Insufficient available balance for withdrawal.');
+      }
+
+      const now = new Date().toISOString();
+      const newAvailable = Number(((bal.available_amount || 0) - amount).toFixed(2));
+      const newWithdrawn = Number(((bal.withdrawn_amount || 0) + amount).toFixed(2));
+
+      await updateDoc(balRef, {
+        available_amount: newAvailable,
+        withdrawn_amount: newWithdrawn,
+        updated_at: now
+      });
+
+      // Append to financial ledger
+      const ledgerDoc = doc(collection(db, 'ledger_entries'));
+      await setDoc(ledgerDoc, {
+        id: ledgerDoc.id,
+        seller_id: sellerId,
+        type: 'payout',
+        amount: -amount,
+        currency: bal.currency || 'USD',
+        description: `Bank transfer withdrawal requested: $${amount.toFixed(2)} to verified account.`,
+        created_at: now
+      } as LedgerEntry);
+
+      // Notification
+      const notifDoc = doc(collection(db, 'notifications'));
+      await setDoc(notifDoc, {
+        id: notifDoc.id,
+        user_id: sellerId,
+        type: 'payout',
+        title: 'Payout initiated',
+        message: `Your withdrawal request of $${amount.toFixed(2)} is being processed to your bank.`,
+        link: '/sell',
+        read: false,
+        created_at: now
+      } as Notification);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `seller_balances/${sellerId}`);
     }
   }
 };

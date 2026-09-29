@@ -52,7 +52,7 @@ export const CheckoutPage: React.FC = () => {
   // Processing state & confirmed order
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [confirmedOrder, setConfirmedOrder] = useState<Order | null>(null);
+  const [confirmedOrders, setConfirmedOrders] = useState<Order[]>([]);
 
   // Require auth or redirect
   if (!currentUser) {
@@ -71,7 +71,7 @@ export const CheckoutPage: React.FC = () => {
     );
   }
 
-  if (cart.length === 0 && !confirmedOrder) {
+  if (cart.length === 0 && confirmedOrders.length === 0) {
     navigate('/cart');
     return null;
   }
@@ -85,32 +85,47 @@ export const CheckoutPage: React.FC = () => {
     setIsProcessing(true);
     setError(null);
     try {
-      // Group order items by seller / store
-      const primaryItem = cart[0];
-      const orderItems = cart.map((item) => ({
-        product_id: item.productId,
-        variant_id: item.variantId,
-        title: item.productTitle,
-        variant_title: item.variantTitle,
-        image: item.image,
-        quantity: item.quantity,
-        unit_price: item.unitPrice,
-        total_price: item.unitPrice * item.quantity,
-      }));
+      // Group order items by seller / store for real multi-vendor fulfillment
+      const sellerGroups = new Map<string, typeof cart>();
+      for (const item of cart) {
+        const group = sellerGroups.get(item.sellerId) || [];
+        group.push(item);
+        sellerGroups.set(item.sellerId, group);
+      }
 
-      const created = await marketplaceService.createOrder({
-        user_id: currentUser.uid,
-        seller_id: primaryItem.sellerId,
-        store_id: primaryItem.storeId,
-        items: orderItems,
-        shipping_fee: shippingFee,
-        tax,
-        shipping_address: shippingAddress,
-        delivery_method: deliveryMethod === 'express' ? 'Express Courier (2-3 days)' : 'Standard Tracked Shipping (5-7 days)',
-        payment_method: paymentMethod === 'card' ? 'Credit/Debit Card (Encrypted)' : 'Digital Wallet',
-      });
+      const createdOrders: Order[] = [];
+      const numGroups = sellerGroups.size;
+      const splitShipping = Number((shippingFee / numGroups).toFixed(2));
+      const splitTax = Number((tax / numGroups).toFixed(2));
 
-      setConfirmedOrder(created);
+      for (const [sellerId, items] of sellerGroups.entries()) {
+        const orderItems = items.map((item) => ({
+          product_id: item.productId,
+          variant_id: item.variantId,
+          title: item.productTitle,
+          variant_title: item.variantTitle,
+          image: item.image,
+          quantity: item.quantity,
+          unit_price: item.unitPrice,
+          total_price: item.unitPrice * item.quantity,
+        }));
+
+        const storeId = items[0].storeId;
+        const created = await marketplaceService.createOrder({
+          user_id: currentUser.uid,
+          seller_id: sellerId,
+          store_id: storeId,
+          items: orderItems,
+          shipping_fee: splitShipping,
+          tax: splitTax,
+          shipping_address: shippingAddress,
+          delivery_method: deliveryMethod === 'express' ? 'Express Courier (2-3 days)' : 'Standard Tracked Shipping (5-7 days)',
+          payment_method: paymentMethod === 'card' ? 'Credit/Debit Card (Encrypted)' : 'Digital Wallet',
+        });
+        createdOrders.push(created);
+      }
+
+      setConfirmedOrders(createdOrders);
       clearCart();
     } catch (err: any) {
       console.error('Failed to create order:', err);
@@ -121,7 +136,9 @@ export const CheckoutPage: React.FC = () => {
   };
 
   // 65. ORDER CONFIRMATION SCREEN
-  if (confirmedOrder) {
+  if (confirmedOrders.length > 0) {
+    const totalAllOrders = confirmedOrders.reduce((sum, o) => sum + o.total, 0);
+
     return (
       <div className="max-w-2xl mx-auto py-12 px-4 sm:px-6 space-y-6 text-center animate-in fade-in duration-300">
         <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center mx-auto">
@@ -133,52 +150,58 @@ export const CheckoutPage: React.FC = () => {
             {t('checkout.confirmed')}
           </h1>
           <p className="text-sm text-[#6E746F]">
-            {t('checkout.confirmedDesc')}
+            {confirmedOrders.length > 1
+              ? `Your items have been split into ${confirmedOrders.length} packages from independent sellers.`
+              : t('checkout.confirmedDesc')}
           </p>
         </div>
 
-        {/* Order Details Receipt Card */}
-        <div className="bg-white p-6 rounded-3xl border border-[#E2E4DF] text-left space-y-4 shadow-xs">
-          <div className="flex flex-wrap items-center justify-between pb-3 border-b border-[#E2E4DF] text-xs">
-            <div>
-              <span className="text-[#6E746F]">Order Number:</span>
-              <p className="font-bold text-[#101312] text-sm">{confirmedOrder.order_number}</p>
-            </div>
-            <div className="text-right">
-              <span className="text-[#6E746F]">Estimated Delivery:</span>
-              <p className="font-bold text-[#123C2F]">5–7 Business Days</p>
-            </div>
-          </div>
-
-          {/* Products in this order */}
-          <div className="space-y-3">
-            {confirmedOrder.items.map((item, idx) => (
-              <div key={idx} className="flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-10 h-10 rounded-lg bg-[#F7F7F3] border border-[#E2E4DF] overflow-hidden shrink-0">
-                    <img src={item.image || ''} alt={item.title} className="w-full h-full object-cover" />
-                  </div>
-                  <div>
-                    <p className="font-semibold text-[#101312] line-clamp-1">{item.title}</p>
-                    <p className="text-[#6E746F]">Qty: {item.quantity}</p>
-                  </div>
+        {/* Order Details Receipt Cards */}
+        <div className="space-y-4">
+          {confirmedOrders.map((ord) => (
+            <div key={ord.id} className="bg-white p-6 rounded-3xl border border-[#E2E4DF] text-left space-y-4 shadow-xs">
+              <div className="flex flex-wrap items-center justify-between pb-3 border-b border-[#E2E4DF] text-xs">
+                <div>
+                  <span className="text-[#6E746F]">Order Number:</span>
+                  <p className="font-bold text-[#101312] text-sm">{ord.order_number}</p>
                 </div>
-                <span className="font-bold text-[#101312]">{formatPrice(item.total_price)}</span>
+                <div className="text-right">
+                  <span className="text-[#6E746F]">Estimated Delivery:</span>
+                  <p className="font-bold text-[#123C2F]">5–7 Business Days</p>
+                </div>
               </div>
-            ))}
-          </div>
 
-          <div className="pt-3 border-t border-[#E2E4DF] flex justify-between text-base font-bold text-[#101312]">
-            <span>Total Paid:</span>
-            <span className="text-[#123C2F]">{formatPrice(confirmedOrder.total)}</span>
-          </div>
+              {/* Products in this order */}
+              <div className="space-y-3">
+                {ord.items.map((item, idx) => (
+                  <div key={idx} className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-10 h-10 rounded-lg bg-[#F7F7F3] border border-[#E2E4DF] overflow-hidden shrink-0">
+                        <img src={item.image || ''} alt={item.title} className="w-full h-full object-cover" />
+                      </div>
+                      <div>
+                        <p className="font-semibold text-[#101312] line-clamp-1">{item.title}</p>
+                        <p className="text-[#6E746F]">Qty: {item.quantity}</p>
+                      </div>
+                    </div>
+                    <span className="font-bold text-[#101312]">{formatPrice(item.total_price)}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="pt-3 border-t border-[#E2E4DF] flex justify-between text-sm font-bold text-[#101312]">
+                <span>Package Total:</span>
+                <span className="text-[#123C2F]">{formatPrice(ord.total)}</span>
+              </div>
+            </div>
+          ))}
         </div>
 
         <div className="flex flex-col sm:flex-row gap-3 justify-center pt-2">
           <Button
             variant="primary"
             size="lg"
-            onClick={() => navigate(`/orders/${confirmedOrder.id}`)}
+            onClick={() => navigate('/orders')}
           >
             {t('checkout.viewOrder')}
           </Button>

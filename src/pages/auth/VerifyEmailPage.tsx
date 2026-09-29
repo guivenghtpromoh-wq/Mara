@@ -114,6 +114,15 @@ export const VerifyEmailPage: React.FC = () => {
             >
               Resend email
             </Button>
+
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full text-xs text-[#6E746F] hover:text-[#101312]"
+              onClick={() => navigate('/')}
+            >
+              Continue to marketplace (verify later)
+            </Button>
           </div>
 
           <div className="mt-6 pt-6 border-t border-[#E2E4DF] flex items-center justify-between text-xs text-[#6E746F]">
