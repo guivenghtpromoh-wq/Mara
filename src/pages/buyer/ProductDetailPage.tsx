@@ -10,13 +10,16 @@ import {
   ChevronLeft,
   ChevronRight,
   CheckCircle,
-  AlertCircle
+  AlertCircle,
+  Flag,
+  X
 } from 'lucide-react';
 import { Button } from '../../components/common/Button';
 import { Badge } from '../../components/common/Badge';
 import { Skeleton } from '../../components/common/Skeleton';
 import { ProductCard } from '../../components/product/ProductCard';
 import { marketplaceService } from '../../services/marketplaceService';
+import { disputeService } from '../../services/disputeService';
 import { Product, Store, Review, ProductVariant } from '../../types';
 import { useCart } from '../../context/CartContext';
 import { useAuth } from '../../context/AuthContext';
@@ -44,6 +47,14 @@ export const ProductDetailPage: React.FC = () => {
   const [reviewComment, setReviewComment] = useState('');
   const [submittingReview, setSubmittingReview] = useState(false);
   const [reviewSuccess, setReviewSuccess] = useState(false);
+  const [isVerifiedBuyer, setIsVerifiedBuyer] = useState(false);
+
+  // Report modal state
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportReason, setReportReason] = useState('PROHIBITED_ITEM');
+  const [reportDetails, setReportDetails] = useState('');
+  const [submittingReport, setSubmittingReport] = useState(false);
+  const [reportSuccess, setReportSuccess] = useState(false);
 
   useEffect(() => {
     if (!slug) return;
@@ -64,15 +75,19 @@ export const ProductDetailPage: React.FC = () => {
             console.error('Failed to store recently viewed:', e);
           }
 
-          // Fetch Store, Reviews, Related Products
-          const [storeData, revs, related] = await Promise.all([
+          // Fetch Store, Reviews, Related Products, and Review eligibility
+          const [storeData, revs, related, reviewEligibility] = await Promise.all([
             marketplaceService.getStoreById(prod.store_id),
             marketplaceService.getProductReviews(prod.id),
             marketplaceService.getProducts({ categoryId: prod.category_id, limitCount: 4 }),
+            currentUser ? marketplaceService.canUserReviewProduct(currentUser.uid, prod.id) : Promise.resolve({ eligible: false })
           ]);
           setStore(storeData);
           setReviews(revs);
           setRelatedProducts(related.filter((p) => p.id !== prod.id));
+          if (reviewEligibility?.eligible) {
+            setIsVerifiedBuyer(true);
+          }
         }
       } catch (err) {
         console.error('Error loading product details:', err);
@@ -82,7 +97,35 @@ export const ProductDetailPage: React.FC = () => {
     };
 
     loadProductData();
-  }, [slug]);
+  }, [slug, currentUser]);
+
+  const handleReportSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser || !product) {
+      navigate('/auth/sign-in');
+      return;
+    }
+    setSubmittingReport(true);
+    try {
+      await disputeService.createModerationReport({
+        reporter_id: currentUser.uid,
+        target_type: 'PRODUCT',
+        target_id: product.id,
+        reason: reportReason,
+        details: reportDetails.trim()
+      });
+      setReportSuccess(true);
+      setTimeout(() => {
+        setReportSuccess(false);
+        setShowReportModal(false);
+        setReportDetails('');
+      }, 3000);
+    } catch (err) {
+      console.error('Failed to submit moderation report:', err);
+    } finally {
+      setSubmittingReport(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -141,10 +184,10 @@ export const ProductDetailPage: React.FC = () => {
       const newRev = await marketplaceService.createReview({
         product_id: product.id,
         user_id: currentUser.uid,
-        user_name: currentUser.displayName || currentUser.email?.split('@')[0] || 'Verified Buyer',
+        user_name: currentUser.displayName || currentUser.email?.split('@')[0] || 'Marketplace Member',
         rating: reviewRating,
         comment: reviewComment.trim(),
-        verified_purchase: true,
+        verified_purchase: false,
       });
       setReviews([newRev, ...reviews]);
       setShowReviewForm(false);
@@ -412,6 +455,17 @@ export const ProductDetailPage: React.FC = () => {
               </Link>
             </div>
           )}
+
+          {/* Report Listing Button */}
+          <div className="flex justify-end pt-1">
+            <button
+              onClick={() => setShowReportModal(true)}
+              className="inline-flex items-center gap-1.5 text-[11px] text-[#6E746F] hover:text-red-700 transition-colors cursor-pointer"
+            >
+              <Flag className="w-3.5 h-3.5" />
+              <span>Report this listing</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -491,7 +545,20 @@ export const ProductDetailPage: React.FC = () => {
             onSubmit={handleReviewSubmit}
             className="p-6 bg-white rounded-2xl border border-[#E2E4DF] space-y-4 max-w-xl"
           >
-            <h3 className="text-sm font-bold text-[#101312]">Share your experience</h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-[#101312]">Share your experience</h3>
+              {isVerifiedBuyer ? (
+                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                  <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                  Verified Buyer
+                </span>
+              ) : (
+                <span className="text-[11px] text-[#6E746F]">
+                  Community Review
+                </span>
+              )}
+            </div>
+
             <div>
               <label className="block text-xs font-semibold text-[#6E746F] mb-1">
                 Rating
@@ -570,9 +637,11 @@ export const ProductDetailPage: React.FC = () => {
                   </span>
                 </div>
                 <p className="text-xs text-[#101312] leading-relaxed">{rev.comment}</p>
-                <div className="flex items-center gap-1.5 pt-1 text-[11px] text-[#123C2F] font-medium">
-                  <CheckCircle className="w-3 h-3 text-[#123C2F]" />
-                  <span>{rev.user_name} (Verified Purchase)</span>
+                <div className="flex items-center gap-1.5 pt-1 text-[11px] font-medium text-[#6E746F]">
+                  {rev.verified_purchase && <CheckCircle className="w-3.5 h-3.5 text-[#123C2F] shrink-0" />}
+                  <span className={rev.verified_purchase ? 'text-[#123C2F] font-semibold' : ''}>
+                    {rev.user_name} {rev.verified_purchase ? '• Verified Purchase' : ''}
+                  </span>
                 </div>
               </div>
             ))}
@@ -613,6 +682,83 @@ export const ProductDetailPage: React.FC = () => {
           Buy now
         </Button>
       </div>
+      {/* Moderation Report Modal */}
+      {showReportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 space-y-4 shadow-xl border border-[#E2E4DF]">
+            <div className="flex items-center justify-between pb-2 border-b border-[#E2E4DF]">
+              <div className="flex items-center gap-2 text-red-700">
+                <Flag className="w-5 h-5" />
+                <h3 className="font-bold text-sm text-[#101312]">Report Listing</h3>
+              </div>
+              <button
+                onClick={() => setShowReportModal(false)}
+                className="p-1.5 rounded-full hover:bg-[#F7F7F3] text-[#6E746F] cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {reportSuccess ? (
+              <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>Thank you. Your report has been submitted to the moderation team.</span>
+              </div>
+            ) : (
+              <form onSubmit={handleReportSubmit} className="space-y-4 text-xs">
+                <p className="text-[#6E746F]">
+                  MARA protects intellectual property and user safety. Please let us know what is wrong with this listing.
+                </p>
+
+                <div>
+                  <label className="block font-semibold text-[#101312] mb-1">Reason</label>
+                  <select
+                    value={reportReason}
+                    onChange={(e) => setReportReason(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-[#E2E4DF] bg-white focus:outline-none focus:border-[#101312]"
+                  >
+                    <option value="PROHIBITED_ITEM">Prohibited or illegal item</option>
+                    <option value="COUNTERFEIT">Counterfeit / IP Infringement</option>
+                    <option value="MISLEADING">Misleading description / Fake images</option>
+                    <option value="OFFENSIVE">Offensive or discriminatory content</option>
+                    <option value="OTHER">Other violation</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-[#101312] mb-1">Details (Optional)</label>
+                  <textarea
+                    rows={3}
+                    value={reportDetails}
+                    onChange={(e) => setReportDetails(e.target.value)}
+                    placeholder="Provide additional details or proof links..."
+                    className="w-full p-2.5 rounded-xl border border-[#E2E4DF] focus:outline-none focus:border-[#101312]"
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowReportModal(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    size="sm"
+                    isLoading={submittingReport}
+                  >
+                    Submit Report
+                  </Button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

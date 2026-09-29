@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import {
   ShieldCheck,
@@ -8,7 +8,9 @@ import {
   MapPin,
   ClipboardCheck,
   ArrowRight,
-  AlertCircle
+  AlertCircle,
+  Tag,
+  Check
 } from 'lucide-react';
 import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
@@ -16,16 +18,50 @@ import { useCart } from '../../context/CartContext';
 import { useAuth } from '../../context/AuthContext';
 import { useI18n } from '../../lib/i18n';
 import { marketplaceService } from '../../services/marketplaceService';
-import { Address, Order } from '../../types';
+import { configService, DEFAULT_COUNTRIES } from '../../services/configService';
+import { Address, Order, CountryConfig, DeliveryProviderConfig, PaymentProviderConfig, Coupon } from '../../types';
 
 export const CheckoutPage: React.FC = () => {
   const navigate = useNavigate();
   const { cart, subtotal, clearCart } = useCart();
   const { currentUser, profile } = useAuth();
-  const { t, formatPrice } = useI18n();
+  const { t, formatPrice, currency } = useI18n();
+
+  // Dynamic configurations from configService
+  const [countries, setCountries] = useState<CountryConfig[]>(DEFAULT_COUNTRIES);
+  const [selectedCountryCode, setSelectedCountryCode] = useState<string>(profile?.country || 'US');
+  const [deliveryProviders, setDeliveryProviders] = useState<DeliveryProviderConfig[]>([]);
+  const [paymentProviders, setPaymentProviders] = useState<PaymentProviderConfig[]>([]);
+  const [selectedDeliveryId, setSelectedDeliveryId] = useState<string>('del-standard-tracked');
+  const [selectedPaymentProviderId, setSelectedPaymentProviderId] = useState<string>('pay-card-gateway');
+
+  // Coupon state
+  const [couponCode, setCouponCode] = useState('');
+  const [appliedCoupon, setAppliedCoupon] = useState<Coupon | null>(null);
+  const [discountAmount, setDiscountAmount] = useState(0);
+  const [couponMessage, setCouponMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // 4 Visual Steps: 1: Shipping, 2: Delivery, 3: Payment, 4: Review
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3 | 4>(1);
+
+  // Load configs
+  useEffect(() => {
+    const loadData = async () => {
+      const [cList, delList, payList] = await Promise.all([
+        configService.getCountries(),
+        configService.getDeliveryProviders(),
+        configService.getPaymentProviders()
+      ]);
+      setCountries(cList);
+      setDeliveryProviders(delList);
+      setPaymentProviders(payList);
+      if (delList.length > 0) setSelectedDeliveryId(delList[0].id);
+      if (payList.length > 0) setSelectedPaymentProviderId(payList[0].id);
+    };
+    loadData();
+  }, []);
+
+  const activeCountry = countries.find((c) => c.code === selectedCountryCode) || countries[0];
 
   // Shipping Form State
   const [shippingAddress, setShippingAddress] = useState<Address>({
@@ -36,15 +72,24 @@ export const CheckoutPage: React.FC = () => {
     city: '',
     region: '',
     postal_code: '',
-    country: 'United States',
+    country: activeCountry.name,
     phone: '',
   });
 
-  // Delivery Method State
-  const [deliveryMethod, setDeliveryMethod] = useState<'standard' | 'express'>('standard');
+  // Update country in address when country select changes
+  const handleCountryChange = (code: string) => {
+    setSelectedCountryCode(code);
+    const countryObj = countries.find((c) => c.code === code);
+    if (countryObj) {
+      setShippingAddress((prev) => ({
+        ...prev,
+        country: countryObj.name,
+        phone: prev.phone || countryObj.phone_code + ' '
+      }));
+    }
+  };
 
-  // Payment Form State
-  const [paymentMethod, setPaymentMethod] = useState<'card' | 'wallet'>('card');
+  // Card details state
   const [cardNumber, setCardNumber] = useState('');
   const [cardExpiry, setCardExpiry] = useState('');
   const [cardCvc, setCardCvc] = useState('');
@@ -53,6 +98,32 @@ export const CheckoutPage: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmedOrders, setConfirmedOrders] = useState<Order[]>([]);
+
+  // Delivery calculation
+  const selectedDelivery = deliveryProviders.find((d) => d.id === selectedDeliveryId) || deliveryProviders[0];
+  const shippingFee = selectedDelivery ? selectedDelivery.base_rate : 8.50;
+
+  // Tax calculation via configurable rules
+  const taxCalculation = configService.calculateTax(subtotal, selectedCountryCode, shippingAddress.region);
+  const taxAmount = taxCalculation.taxAmount;
+
+  // Subtotal after coupon discount
+  const discountedSubtotal = Math.max(0, subtotal - discountAmount);
+  const grandTotal = Number((discountedSubtotal + shippingFee + (taxCalculation.isInclusive ? 0 : taxAmount)).toFixed(2));
+
+  // Handle coupon validation
+  const handleApplyCoupon = async () => {
+    if (!couponCode.trim()) return;
+    setCouponMessage(null);
+    const res = await marketplaceService.validateCoupon(couponCode, subtotal);
+    if (res.valid && res.coupon) {
+      setAppliedCoupon(res.coupon);
+      setDiscountAmount(res.discountAmount);
+      setCouponMessage({ type: 'success', text: `Coupon applied: -$${res.discountAmount.toFixed(2)} off` });
+    } else {
+      setCouponMessage({ type: 'error', text: res.error || 'Invalid or expired coupon' });
+    }
+  };
 
   // Require auth or redirect
   if (!currentUser) {
@@ -76,16 +147,11 @@ export const CheckoutPage: React.FC = () => {
     return null;
   }
 
-  // Calculate pricing
-  const shippingFee = deliveryMethod === 'express' ? 18.0 : subtotal > 100 ? 0 : 9.99;
-  const tax = Number((subtotal * 0.08).toFixed(2));
-  const grandTotal = Number((subtotal + shippingFee + tax).toFixed(2));
-
   const handlePlaceOrder = async () => {
     setIsProcessing(true);
     setError(null);
     try {
-      // Group order items by seller / store for real multi-vendor fulfillment
+      // Group order items by seller / store for true multi-vendor fulfillment
       const sellerGroups = new Map<string, typeof cart>();
       for (const item of cart) {
         const group = sellerGroups.get(item.sellerId) || [];
@@ -96,7 +162,8 @@ export const CheckoutPage: React.FC = () => {
       const createdOrders: Order[] = [];
       const numGroups = sellerGroups.size;
       const splitShipping = Number((shippingFee / numGroups).toFixed(2));
-      const splitTax = Number((tax / numGroups).toFixed(2));
+      const splitTax = Number((taxAmount / numGroups).toFixed(2));
+      const activePayment = paymentProviders.find((p) => p.id === selectedPaymentProviderId);
 
       for (const [sellerId, items] of sellerGroups.entries()) {
         const orderItems = items.map((item) => ({
@@ -119,8 +186,10 @@ export const CheckoutPage: React.FC = () => {
           shipping_fee: splitShipping,
           tax: splitTax,
           shipping_address: shippingAddress,
-          delivery_method: deliveryMethod === 'express' ? 'Express Courier (2-3 days)' : 'Standard Tracked Shipping (5-7 days)',
-          payment_method: paymentMethod === 'card' ? 'Credit/Debit Card (Encrypted)' : 'Digital Wallet',
+          delivery_method: selectedDelivery ? selectedDelivery.name : 'Standard Tracked Shipping',
+          payment_method: activePayment ? activePayment.name : 'Credit/Debit Card (Encrypted)',
+          currency: currency || 'USD',
+          provider: activePayment?.code || 'STRIPE'
         });
         createdOrders.push(created);
       }
@@ -269,6 +338,24 @@ export const CheckoutPage: React.FC = () => {
                 <span>1. Shipping Address</span>
               </h2>
 
+              {/* Dynamic Country Selector */}
+              <div>
+                <label className="block text-xs font-semibold text-[#101312] mb-1">
+                  Country / Market Region <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={selectedCountryCode}
+                  onChange={(e) => handleCountryChange(e.target.value)}
+                  className="w-full px-3 py-2.5 bg-white border border-[#E2E4DF] rounded-xl text-xs font-medium text-[#101312] focus:outline-none focus:ring-1 focus:ring-[#123C2F]"
+                >
+                  {countries.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.name} ({c.default_currency})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <Input
                   label="First Name"
@@ -285,45 +372,45 @@ export const CheckoutPage: React.FC = () => {
               </div>
 
               <Input
-                label="Street Address"
+                label="Street Address / Building"
                 required
-                placeholder="123 Marketplace Blvd"
+                placeholder="Street address, avenue, district"
                 value={shippingAddress.address_line1}
                 onChange={(e) => setShippingAddress({ ...shippingAddress, address_line1: e.target.value })}
               />
 
               <Input
-                label="Apartment, suite, etc. (optional)"
+                label="Apartment, suite, unit (optional)"
                 value={shippingAddress.address_line2}
                 onChange={(e) => setShippingAddress({ ...shippingAddress, address_line2: e.target.value })}
               />
 
               <div className="grid grid-cols-3 gap-3">
                 <Input
-                  label="City"
+                  label="City / Town"
                   required
                   value={shippingAddress.city}
                   onChange={(e) => setShippingAddress({ ...shippingAddress, city: e.target.value })}
                 />
                 <Input
-                  label="Region / State"
+                  label="Region / State / Dept"
                   required
                   value={shippingAddress.region}
                   onChange={(e) => setShippingAddress({ ...shippingAddress, region: e.target.value })}
                 />
                 <Input
-                  label="Postal Code"
-                  required
+                  label={`Postal Code ${activeCountry.postal_code_required ? '*' : '(optional)'}`}
+                  required={activeCountry.postal_code_required}
                   value={shippingAddress.postal_code}
                   onChange={(e) => setShippingAddress({ ...shippingAddress, postal_code: e.target.value })}
                 />
               </div>
 
               <Input
-                label="Country"
-                required
-                value={shippingAddress.country}
-                onChange={(e) => setShippingAddress({ ...shippingAddress, country: e.target.value })}
+                label="Contact Phone"
+                placeholder={`${activeCountry.phone_code} ...`}
+                value={shippingAddress.phone}
+                onChange={(e) => setShippingAddress({ ...shippingAddress, phone: e.target.value })}
               />
 
               <div className="pt-4 flex justify-end">
@@ -331,8 +418,9 @@ export const CheckoutPage: React.FC = () => {
                   variant="primary"
                   size="md"
                   onClick={() => {
-                    if (!shippingAddress.first_name || !shippingAddress.address_line1 || !shippingAddress.city) {
-                      setError('Please fill in your shipping address completely.');
+                    const validation = configService.validateAddress(shippingAddress, selectedCountryCode);
+                    if (!validation.isValid) {
+                      setError(`Please fill in required fields: ${validation.missingFields.join(', ')}.`);
                       return;
                     }
                     setError(null);
@@ -350,59 +438,38 @@ export const CheckoutPage: React.FC = () => {
             <div className="space-y-4">
               <h2 className="text-base font-bold text-[#101312] flex items-center gap-2">
                 <Truck className="w-4 h-4 text-[#123C2F]" />
-                <span>2. Delivery Method</span>
+                <span>2. Delivery Provider</span>
               </h2>
 
               <div className="space-y-3">
-                <label
-                  onClick={() => setDeliveryMethod('standard')}
-                  className={`flex items-center justify-between p-4 rounded-2xl border cursor-pointer transition-all ${
-                    deliveryMethod === 'standard'
-                      ? 'border-[#101312] bg-[#F7F7F3]'
-                      : 'border-[#E2E4DF] bg-white'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="radio"
-                      name="delivery"
-                      checked={deliveryMethod === 'standard'}
-                      onChange={() => setDeliveryMethod('standard')}
-                      className="text-[#101312]"
-                    />
-                    <div>
-                      <p className="text-xs font-bold text-[#101312]">Standard Tracked Courier</p>
-                      <p className="text-[11px] text-[#6E746F]">Delivered in 5–7 business days</p>
+                {deliveryProviders.map((provider) => (
+                  <label
+                    key={provider.id}
+                    onClick={() => setSelectedDeliveryId(provider.id)}
+                    className={`flex items-center justify-between p-4 rounded-2xl border cursor-pointer transition-all ${
+                      selectedDeliveryId === provider.id
+                        ? 'border-[#101312] bg-[#F7F7F3]'
+                        : 'border-[#E2E4DF] bg-white'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="radio"
+                        name="delivery"
+                        checked={selectedDeliveryId === provider.id}
+                        onChange={() => setSelectedDeliveryId(provider.id)}
+                        className="text-[#101312]"
+                      />
+                      <div>
+                        <p className="text-xs font-bold text-[#101312]">{provider.name}</p>
+                        <p className="text-[11px] text-[#6E746F]">Estimated: {provider.estimated_days}</p>
+                      </div>
                     </div>
-                  </div>
-                  <span className="text-xs font-bold text-[#101312]">
-                    {subtotal > 100 ? 'Free' : '$9.99'}
-                  </span>
-                </label>
-
-                <label
-                  onClick={() => setDeliveryMethod('express')}
-                  className={`flex items-center justify-between p-4 rounded-2xl border cursor-pointer transition-all ${
-                    deliveryMethod === 'express'
-                      ? 'border-[#101312] bg-[#F7F7F3]'
-                      : 'border-[#E2E4DF] bg-white'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="radio"
-                      name="delivery"
-                      checked={deliveryMethod === 'express'}
-                      onChange={() => setDeliveryMethod('express')}
-                      className="text-[#101312]"
-                    />
-                    <div>
-                      <p className="text-xs font-bold text-[#101312]">Express Air Courier</p>
-                      <p className="text-[11px] text-[#6E746F]">Priority delivery in 2–3 business days</p>
-                    </div>
-                  </div>
-                  <span className="text-xs font-bold text-[#101312]">$18.00</span>
-                </label>
+                    <span className="text-xs font-bold text-[#101312]">
+                      {provider.base_rate === 0 ? 'Free' : formatPrice(provider.base_rate)}
+                    </span>
+                  </label>
+                ))}
               </div>
 
               <div className="pt-4 flex justify-between">
@@ -421,66 +488,53 @@ export const CheckoutPage: React.FC = () => {
             <div className="space-y-4">
               <h2 className="text-base font-bold text-[#101312] flex items-center gap-2">
                 <CreditCard className="w-4 h-4 text-[#123C2F]" />
-                <span>3. Payment Information</span>
+                <span>3. Payment Provider</span>
               </h2>
 
-              <div className="grid grid-cols-2 gap-3 mb-4">
-                <button
-                  type="button"
-                  onClick={() => setPaymentMethod('card')}
-                  className={`p-3 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 ${
-                    paymentMethod === 'card'
-                      ? 'border-[#101312] bg-[#101312] text-white'
-                      : 'border-[#E2E4DF] bg-white text-[#101312]'
-                  }`}
-                >
-                  <CreditCard className="w-4 h-4" />
-                  <span>Credit / Debit Card</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPaymentMethod('wallet')}
-                  className={`p-3 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 ${
-                    paymentMethod === 'wallet'
-                      ? 'border-[#101312] bg-[#101312] text-white'
-                      : 'border-[#E2E4DF] bg-white text-[#101312]'
-                  }`}
-                >
-                  <span>Digital Wallet</span>
-                </button>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                {paymentProviders.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setSelectedPaymentProviderId(p.id)}
+                    className={`p-3 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 ${
+                      selectedPaymentProviderId === p.id
+                        ? 'border-[#101312] bg-[#101312] text-white'
+                        : 'border-[#E2E4DF] bg-white text-[#101312]'
+                    }`}
+                  >
+                    <CreditCard className="w-4 h-4" />
+                    <span>{p.name}</span>
+                  </button>
+                ))}
               </div>
 
-              {paymentMethod === 'card' ? (
-                <div className="space-y-3">
+              {/* Secure Simulated Card Entry Form for Stripe */}
+              <div className="space-y-3">
+                <Input
+                  label="Card Number / Payment Identifier"
+                  required
+                  placeholder="•••• •••• •••• ••••"
+                  value={cardNumber}
+                  onChange={(e) => setCardNumber(e.target.value)}
+                  icon={<CreditCard className="w-4 h-4" />}
+                />
+                <div className="grid grid-cols-2 gap-3">
                   <Input
-                    label="Card Number"
-                    required
-                    placeholder="•••• •••• •••• ••••"
-                    value={cardNumber}
-                    onChange={(e) => setCardNumber(e.target.value)}
-                    icon={<CreditCard className="w-4 h-4" />}
+                    label="Expiry Date"
+                    placeholder="MM/YY"
+                    value={cardExpiry}
+                    onChange={(e) => setCardExpiry(e.target.value)}
                   />
-                  <div className="grid grid-cols-2 gap-3">
-                    <Input
-                      label="Expiry Date"
-                      placeholder="MM/YY"
-                      value={cardExpiry}
-                      onChange={(e) => setCardExpiry(e.target.value)}
-                    />
-                    <Input
-                      label="CVC / Security Code"
-                      placeholder="•••"
-                      type="password"
-                      value={cardCvc}
-                      onChange={(e) => setCardCvc(e.target.value)}
-                    />
-                  </div>
+                  <Input
+                    label="CVC / Verification Code"
+                    placeholder="•••"
+                    type="password"
+                    value={cardCvc}
+                    onChange={(e) => setCardCvc(e.target.value)}
+                  />
                 </div>
-              ) : (
-                <div className="p-4 bg-[#F7F7F3] rounded-2xl border border-[#E2E4DF] text-xs text-[#6E746F]">
-                  You will authenticate through your digital wallet provider on order submission.
-                </div>
-              )}
+              </div>
 
               <div className="pt-4 flex justify-between">
                 <Button variant="ghost" size="md" onClick={() => setCurrentStep(2)}>
@@ -511,15 +565,16 @@ export const CheckoutPage: React.FC = () => {
                   <p className="text-[#6E746F]">
                     {shippingAddress.city}, {shippingAddress.region} {shippingAddress.postal_code}
                   </p>
+                  <p className="text-[#6E746F]">{shippingAddress.country} ({shippingAddress.phone})</p>
                 </div>
 
                 <div className="p-4 rounded-2xl bg-[#F7F7F3] border border-[#E2E4DF] space-y-1">
                   <p className="font-bold text-[#101312]">Payment & Delivery:</p>
                   <p className="text-[#6E746F]">
-                    Method: {paymentMethod === 'card' ? 'Card Ending ••••' : 'Digital Wallet'}
+                    Payment: {paymentProviders.find((p) => p.id === selectedPaymentProviderId)?.name || 'Credit Card'}
                   </p>
                   <p className="text-[#6E746F]">
-                    Shipping: {deliveryMethod === 'express' ? 'Express (2-3 days)' : 'Standard (5-7 days)'}
+                    Delivery: {selectedDelivery?.name} ({selectedDelivery?.estimated_days})
                   </p>
                 </div>
               </div>
@@ -560,29 +615,58 @@ export const CheckoutPage: React.FC = () => {
         {/* Sidebar Summary */}
         <div className="bg-white p-6 rounded-3xl border border-[#E2E4DF] shadow-xs space-y-4">
           <h3 className="text-sm font-bold text-[#101312]">Summary</h3>
+
+          {/* Coupon Code Input */}
+          <div className="space-y-2 pb-3 border-b border-[#E2E4DF]">
+            <div className="flex gap-2">
+              <Input
+                placeholder="Discount code"
+                value={couponCode}
+                onChange={(e) => setCouponCode(e.target.value)}
+                className="text-xs"
+              />
+              <Button variant="outline" size="sm" onClick={handleApplyCoupon}>
+                Apply
+              </Button>
+            </div>
+            {couponMessage && (
+              <p className={`text-[11px] ${couponMessage.type === 'success' ? 'text-emerald-700' : 'text-red-600'}`}>
+                {couponMessage.text}
+              </p>
+            )}
+          </div>
+
           <div className="space-y-2 text-xs">
             <div className="flex justify-between text-[#6E746F]">
               <span>Items Subtotal</span>
               <span className="font-semibold text-[#101312]">{formatPrice(subtotal)}</span>
             </div>
+            {discountAmount > 0 && (
+              <div className="flex justify-between text-emerald-700">
+                <span>Discount ({appliedCoupon?.code})</span>
+                <span className="font-semibold">-{formatPrice(discountAmount)}</span>
+              </div>
+            )}
             <div className="flex justify-between text-[#6E746F]">
-              <span>Shipping</span>
+              <span>Shipping ({selectedDelivery?.name || 'Standard'})</span>
               <span className="font-semibold text-[#101312]">
                 {shippingFee === 0 ? 'Free' : formatPrice(shippingFee)}
               </span>
             </div>
             <div className="flex justify-between text-[#6E746F]">
-              <span>Taxes (8%)</span>
-              <span className="font-semibold text-[#101312]">{formatPrice(tax)}</span>
+              <span>
+                {taxCalculation.taxName} ({(taxCalculation.rate * 100).toFixed(0)}%{taxCalculation.isInclusive ? ' incl.' : ''})
+              </span>
+              <span className="font-semibold text-[#101312]">{formatPrice(taxAmount)}</span>
             </div>
             <div className="pt-2 border-t border-[#E2E4DF] flex justify-between text-sm font-bold text-[#101312]">
-              <span>Total</span>
+              <span>Total ({currency})</span>
               <span className="text-base text-[#123C2F]">{formatPrice(grandTotal)}</span>
             </div>
           </div>
           <div className="pt-2 flex items-center gap-2 text-[11px] text-[#6E746F]">
             <ShieldCheck className="w-4 h-4 text-[#123C2F] shrink-0" />
-            <span>Encrypted transaction & escrow release upon confirmed delivery</span>
+            <span>Multi-vendor settlement & escrow protected</span>
           </div>
         </div>
       </div>

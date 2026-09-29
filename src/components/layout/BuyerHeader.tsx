@@ -97,6 +97,14 @@ export const BuyerHeader: React.FC = () => {
             )}
           </Link>
 
+          {/* Sell on MARA */}
+          <Link
+            to="/sell"
+            className="hidden sm:inline-flex items-center px-2.5 py-1 text-xs font-semibold rounded-lg text-[#101312] border border-[#E2E4DF] hover:bg-[#F7F7F3] transition-colors"
+          >
+            Sell
+          </Link>
+
           {/* Profile / Account */}
           <Link
             to="/profile"

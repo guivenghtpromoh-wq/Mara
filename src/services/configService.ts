@@ -271,7 +271,7 @@ export const configService = {
       const snap = await getDocs(collection(db, 'config_taxes'));
       if (snap.empty) return DEFAULT_TAX_RULES;
       const list: TaxRule[] = [];
-      snap.forEach((d) => list.push({ id: d.id, ...(d.data() as TaxRule) }));
+      snap.forEach((d) => list.push({ ...(d.data() as TaxRule), id: d.id }));
       return list;
     } catch {
       return DEFAULT_TAX_RULES;
@@ -331,7 +331,7 @@ export const configService = {
       const snap = await getDocs(collection(db, 'config_delivery'));
       if (snap.empty) return DEFAULT_DELIVERY_PROVIDERS;
       const list: DeliveryProviderConfig[] = [];
-      snap.forEach((d) => list.push({ id: d.id, ...(d.data() as DeliveryProviderConfig) }));
+      snap.forEach((d) => list.push({ ...(d.data() as DeliveryProviderConfig), id: d.id }));
       return list;
     } catch {
       return DEFAULT_DELIVERY_PROVIDERS;
@@ -344,7 +344,7 @@ export const configService = {
       const snap = await getDocs(collection(db, 'config_payments'));
       if (snap.empty) return DEFAULT_PAYMENT_PROVIDERS;
       const list: PaymentProviderConfig[] = [];
-      snap.forEach((d) => list.push({ id: d.id, ...(d.data() as PaymentProviderConfig) }));
+      snap.forEach((d) => list.push({ ...(d.data() as PaymentProviderConfig), id: d.id }));
       return list;
     } catch {
       return DEFAULT_PAYMENT_PROVIDERS;

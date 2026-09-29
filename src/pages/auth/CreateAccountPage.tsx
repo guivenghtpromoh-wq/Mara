@@ -1,14 +1,15 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Mail, Lock, User, AlertCircle } from 'lucide-react';
+import { Mail, Lock, User, AlertCircle, Shield, Store, UserCheck } from 'lucide-react';
 import { MaraLogo } from '../../components/common/MaraLogo';
 import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
+import { FirebaseDomainHelper } from '../../components/common/FirebaseDomainHelper';
 import { useAuth } from '../../context/AuthContext';
 
 export const CreateAccountPage: React.FC = () => {
   const navigate = useNavigate();
-  const { createAccount, signInWithGoogle } = useAuth();
+  const { createAccount, signInWithGoogle, signInWithDemoAccount } = useAuth();
 
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
@@ -18,7 +19,9 @@ export const CreateAccountPage: React.FC = () => {
 
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [demoLoading, setDemoLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isUnauthorizedDomain, setIsUnauthorizedDomain] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -44,7 +47,7 @@ export const CreateAccountPage: React.FC = () => {
       console.error('Account creation error:', err);
       if (err.code === 'auth/operation-not-allowed' || String(err).includes('OPERATION_NOT_ALLOWED')) {
         setError(
-          'L\'inscription par e-mail et mot de passe nécessite l\'activation du fournisseur dans la console Firebase. Vous pouvez créer votre compte immédiatement en 1 clic avec Google ci-dessous !'
+          'Email & Password provider is not yet enabled in Firebase Console. You can use Google Sign-in above or instant demo test accounts below.'
         );
       } else if (err.code === 'auth/email-already-in-use') {
         setError('An account with this email address already exists. Please sign in instead.');
@@ -66,9 +69,31 @@ export const CreateAccountPage: React.FC = () => {
       navigate('/');
     } catch (err: any) {
       console.error('Google sign in error:', err);
-      setError(err.message || 'Google account sign up could not be completed.');
+      const isDomainError =
+        err?.code === 'auth/unauthorized-domain' ||
+        String(err?.message || '').includes('auth/unauthorized-domain') ||
+        String(err || '').includes('unauthorized-domain');
+
+      if (isDomainError) {
+        setIsUnauthorizedDomain(true);
+        setError(null);
+      } else {
+        setError(err.message || 'Google account sign up could not be completed.');
+      }
     } finally {
       setGoogleLoading(false);
+    }
+  };
+
+  const handleDemoSignIn = async (role: 'BUYER' | 'SELLER') => {
+    setDemoLoading(role);
+    try {
+      await signInWithDemoAccount(role);
+      navigate('/');
+    } catch (e: any) {
+      setError(e.message || 'Demo sign in failed.');
+    } finally {
+      setDemoLoading(null);
     }
   };
 
@@ -85,28 +110,26 @@ export const CreateAccountPage: React.FC = () => {
       </div>
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md px-4 sm:px-0">
-        <div className="bg-white py-8 px-6 shadow-xs rounded-2xl border border-[#E2E4DF] sm:px-10">
-          {error && (
-            <div className="mb-5 p-3.5 rounded-xl bg-amber-50 border border-amber-200 flex flex-col gap-2.5 text-xs text-amber-900">
+        <div className="bg-white py-8 px-6 shadow-xs rounded-2xl border border-[#E2E4DF] sm:px-10 space-y-6">
+          {/* Specific Domain Authorization Helper */}
+          {isUnauthorizedDomain && (
+            <FirebaseDomainHelper
+              onRetryGoogle={handleGoogleSignIn}
+              onSuccess={() => navigate('/')}
+            />
+          )}
+
+          {error && !isUnauthorizedDomain && (
+            <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 flex flex-col gap-2.5 text-xs text-amber-900">
               <div className="flex items-start gap-2">
                 <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-700" />
                 <span>{error}</span>
               </div>
-              <Button
-                type="button"
-                variant="primary"
-                size="sm"
-                className="w-full"
-                isLoading={googleLoading}
-                onClick={handleGoogleSignIn}
-              >
-                Créer mon compte avec Google (Recommandé)
-              </Button>
             </div>
           )}
 
           {/* Quick Google Sign-in */}
-          <div className="mb-5">
+          <div>
             <Button
               type="button"
               variant="outline"
@@ -151,7 +174,6 @@ export const CreateAccountPage: React.FC = () => {
             <div className="grid grid-cols-2 gap-3">
               <Input
                 label="First Name"
-                type="text"
                 required
                 value={firstName}
                 onChange={(e) => setFirstName(e.target.value)}
@@ -160,7 +182,6 @@ export const CreateAccountPage: React.FC = () => {
               />
               <Input
                 label="Last Name"
-                type="text"
                 required
                 value={lastName}
                 onChange={(e) => setLastName(e.target.value)}
@@ -221,7 +242,34 @@ export const CreateAccountPage: React.FC = () => {
             </Button>
           </form>
 
-          <div className="mt-6 text-center text-xs text-[#6E746F]">
+          {/* Quick Demo Accounts Strip */}
+          <div className="pt-4 border-t border-[#E2E4DF] space-y-2">
+            <span className="text-[11px] font-semibold text-[#6E746F] block text-center uppercase tracking-wider">
+              Accès instantané sans configuration (Mode Test)
+            </span>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => handleDemoSignIn('SELLER')}
+                disabled={Boolean(demoLoading)}
+                className="py-1.5 px-2 rounded-xl border border-[#E2E4DF] bg-[#F7F7F3] hover:bg-amber-50 hover:border-amber-300 text-[11px] font-semibold text-[#101312] flex flex-col items-center gap-1 transition-all cursor-pointer"
+              >
+                <Store className="w-3.5 h-3.5 text-[#123C2F]" />
+                <span>Vendeur</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDemoSignIn('BUYER')}
+                disabled={Boolean(demoLoading)}
+                className="py-1.5 px-2 rounded-xl border border-[#E2E4DF] bg-[#F7F7F3] hover:bg-blue-50 hover:border-blue-300 text-[11px] font-semibold text-[#101312] flex flex-col items-center gap-1 transition-all cursor-pointer"
+              >
+                <UserCheck className="w-3.5 h-3.5 text-blue-700" />
+                <span>Acheteur</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="text-center text-xs text-[#6E746F]">
             Already have an account?{' '}
             <Link to="/auth/sign-in" className="text-[#101312] font-semibold hover:underline">
               Sign in

@@ -71,6 +71,9 @@ function RootRouter() {
         <Route path="settings" element={<SellerStorePage />} />
       </Route>
 
+      {/* Redirect any /admin request */}
+      <Route path="/admin/*" element={<Navigate to="/" replace />} />
+
       {/* Buyer & Public Marketplace Section */}
       <Route element={<BuyerLayout />}>
         <Route index element={!introSeen ? <Navigate to="/intro" replace /> : <HomePage />} />

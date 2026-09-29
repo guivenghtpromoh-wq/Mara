@@ -19,6 +19,8 @@ export interface UserProfile {
   language: string;
   currency: string;
   timezone: string;
+  phone?: string;
+  role?: AppUserRole;
   created_at?: string;
   updated_at?: string;
 }
@@ -294,15 +296,47 @@ export interface SellerBalance {
   updated_at: string;
 }
 
+export type LedgerType =
+  | 'SALE'
+  | 'COMMISSION'
+  | 'TAX'
+  | 'SHIPPING'
+  | 'REFUND'
+  | 'PAYOUT'
+  | 'ADJUSTMENT'
+  | 'CHARGEBACK'
+  | 'DISPUTE_ADJUSTMENT'
+  // Backward compatibility with legacy entries
+  | 'payment'
+  | 'fee'
+  | 'seller_earning';
+
 export interface LedgerEntry {
   id: string;
   seller_id: string;
   order_id?: string;
-  type: 'payment' | 'fee' | 'seller_earning' | 'refund' | 'payout' | 'adjustment';
+  transaction_id?: string;
+  type: LedgerType;
+  direction?: 'CREDIT' | 'DEBIT';
   amount: number;
   currency: string;
   description: string;
+  reference?: string;
   created_at: string;
+}
+
+export interface PayoutRequest {
+  id: string;
+  seller_id: string;
+  amount: number;
+  currency: string;
+  provider: string; // 'BANK_TRANSFER' | 'PAYPAL' | 'STRIPE_CONNECT' | 'MOBILE_MONEY' | 'LOCAL_PROVIDER'
+  account_info: string;
+  status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  admin_notes?: string;
+  transaction_ref?: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Wishlist {

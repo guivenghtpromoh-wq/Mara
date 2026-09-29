@@ -1,13 +1,13 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 
 export type Language = 'en' | 'fr' | 'es' | 'ht';
-export type CurrencyCode = 'USD' | 'EUR' | 'CAD' | 'HTG' | 'GBP';
+export type CurrencyCode = 'USD' | 'EUR' | 'CAD' | 'HTG' | 'GBP' | 'DOP' | 'MXN';
 
 interface CurrencyInfo {
   code: CurrencyCode;
   symbol: string;
   name: string;
-  rateAgainstUSD: number; // For clean currency conversions
+  rateAgainstUSD: number; // Clean explicit rates
 }
 
 export const CURRENCIES: Record<CurrencyCode, CurrencyInfo> = {
@@ -16,6 +16,8 @@ export const CURRENCIES: Record<CurrencyCode, CurrencyInfo> = {
   CAD: { code: 'CAD', symbol: 'CA$', name: 'Canadian Dollar', rateAgainstUSD: 1.35 },
   HTG: { code: 'HTG', symbol: 'G', name: 'Haitian Gourde', rateAgainstUSD: 131.5 },
   GBP: { code: 'GBP', symbol: '£', name: 'British Pound', rateAgainstUSD: 0.78 },
+  DOP: { code: 'DOP', symbol: 'RD$', name: 'Dominican Peso', rateAgainstUSD: 59.8 },
+  MXN: { code: 'MXN', symbol: 'MX$', name: 'Mexican Peso', rateAgainstUSD: 18.2 },
 };
 
 const translations: Record<Language, Record<string, string>> = {
@@ -477,6 +479,10 @@ interface I18nContextType {
   setCurrency: (curr: CurrencyCode) => void;
   t: (key: string, params?: Record<string, string | number>) => string;
   formatPrice: (amountInUSD: number) => string;
+  formatAmount: (amount: number, currencyCode?: string) => string;
+  convertAmount: (amount: number, fromCurrency: string, toCurrency: string) => number;
+  formatDate: (date: string | Date, options?: Intl.DateTimeFormatOptions) => string;
+  formatNumber: (value: number, options?: Intl.NumberFormatOptions) => string;
 }
 
 const I18nContext = createContext<I18nContextType | null>(null);
@@ -521,8 +527,61 @@ export const I18nProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return `${currInfo.symbol}${converted.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
+  const formatAmount = (amount: number, currencyCode?: string): string => {
+    const targetCode = (currencyCode || currency) as CurrencyCode;
+    const info = CURRENCIES[targetCode] || { symbol: targetCode, rateAgainstUSD: 1.0 };
+    if (targetCode === 'HTG') {
+      return `${Math.round(amount).toLocaleString()} ${info.symbol}`;
+    }
+    if (targetCode === 'EUR') {
+      return `${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${info.symbol}`;
+    }
+    return `${info.symbol}${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
+
+  const convertAmount = (amount: number, fromCurrency: string, toCurrency: string): number => {
+    const fromInfo = CURRENCIES[fromCurrency as CurrencyCode] || CURRENCIES.USD;
+    const toInfo = CURRENCIES[toCurrency as CurrencyCode] || CURRENCIES.USD;
+    // Convert to USD first, then to target
+    const inUSD = amount / fromInfo.rateAgainstUSD;
+    const converted = inUSD * toInfo.rateAgainstUSD;
+    return Number(converted.toFixed(2));
+  };
+
+  const formatDate = (date: string | Date, options?: Intl.DateTimeFormatOptions): string => {
+    try {
+      const d = typeof date === 'string' ? new Date(date) : date;
+      const locale = language === 'ht' ? 'fr-HT' : language;
+      return d.toLocaleDateString(locale, options || {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
+      });
+    } catch {
+      return String(date);
+    }
+  };
+
+  const formatNumber = (value: number, options?: Intl.NumberFormatOptions): string => {
+    const locale = language === 'ht' ? 'fr-HT' : language;
+    return value.toLocaleString(locale, options);
+  };
+
   return (
-    <I18nContext.Provider value={{ language, setLanguage, currency, setCurrency, t, formatPrice }}>
+    <I18nContext.Provider
+      value={{
+        language,
+        setLanguage,
+        currency,
+        setCurrency,
+        t,
+        formatPrice,
+        formatAmount,
+        convertAmount,
+        formatDate,
+        formatNumber
+      }}
+    >
       {children}
     </I18nContext.Provider>
   );

@@ -223,6 +223,98 @@
         "updated_at": { "type": "string" }
       },
       "required": ["id", "seller_id", "currency"]
+    },
+    "PayoutRequest": {
+      "title": "PayoutRequest",
+      "description": "Seller revenue withdrawal request",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "seller_id": { "type": "string" },
+        "amount": { "type": "number" },
+        "currency": { "type": "string" },
+        "provider": { "type": "string" },
+        "account_info": { "type": "string" },
+        "status": { "type": "string", "enum": ["PENDING", "PROCESSING", "COMPLETED", "FAILED"] },
+        "admin_notes": { "type": "string" },
+        "transaction_ref": { "type": "string" },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" }
+      },
+      "required": ["id", "seller_id", "amount", "currency", "status"]
+    },
+    "Dispute": {
+      "title": "Dispute",
+      "description": "Buyer dispute filed against order",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "order_id": { "type": "string" },
+        "seller_order_id": { "type": "string" },
+        "buyer_id": { "type": "string" },
+        "seller_id": { "type": "string" },
+        "reason": { "type": "string" },
+        "status": { "type": "string", "enum": ["OPEN", "UNDER_REVIEW", "WAITING", "RESOLVED", "CLOSED"] },
+        "dispute_type": { "type": "string" },
+        "refund_requested_amount": { "type": "number" },
+        "resolution_notes": { "type": "string" },
+        "messages": { "type": "array" },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" }
+      },
+      "required": ["id", "order_id", "buyer_id", "seller_id", "reason", "status"]
+    },
+    "Coupon": {
+      "title": "Coupon",
+      "description": "Promotional discount voucher",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "code": { "type": "string" },
+        "discount_type": { "type": "string", "enum": ["PERCENTAGE", "FIXED"] },
+        "discount_value": { "type": "number" },
+        "min_spend": { "type": "number" },
+        "valid_from": { "type": "string" },
+        "valid_until": { "type": "string" },
+        "times_used": { "type": "number" },
+        "active": { "type": "boolean" }
+      },
+      "required": ["id", "code", "discount_type", "discount_value", "active"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable append-only administrative operation log",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "actor_id": { "type": "string" },
+        "actor_email": { "type": "string" },
+        "actor_role": { "type": "string" },
+        "action": { "type": "string" },
+        "target_type": { "type": "string" },
+        "target_id": { "type": "string" },
+        "details": { "type": "object" },
+        "created_at": { "type": "string" }
+      },
+      "required": ["id", "actor_id", "actor_email", "action", "target_type", "target_id"]
+    },
+    "ModerationReport": {
+      "title": "ModerationReport",
+      "description": "Community reported content violation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "target_type": { "type": "string", "enum": ["PRODUCT", "STORE", "USER", "REVIEW"] },
+        "target_id": { "type": "string" },
+        "reporter_id": { "type": "string" },
+        "reason": { "type": "string" },
+        "details": { "type": "string" },
+        "status": { "type": "string", "enum": ["PENDING", "APPROVED", "REJECTED", "SUSPENDED"] },
+        "reviewed_by": { "type": "string" },
+        "action_taken": { "type": "string" },
+        "created_at": { "type": "string" }
+      },
+      "required": ["id", "target_type", "target_id", "reporter_id", "reason", "status"]
     }
   },
   "firestore": {
@@ -249,6 +341,30 @@
     "/orders/{orderId}": {
       "schema": "Order",
       "description": "Marketplace orders"
+    },
+    "/seller_orders/{orderId}": {
+      "schema": "Order",
+      "description": "Decomposed merchant order slice"
+    },
+    "/payout_requests/{payoutId}": {
+      "schema": "PayoutRequest",
+      "description": "Seller withdrawal requests"
+    },
+    "/disputes/{disputeId}": {
+      "schema": "Dispute",
+      "description": "Buyer disputes"
+    },
+    "/coupons/{couponId}": {
+      "schema": "Coupon",
+      "description": "Promotional coupons"
+    },
+    "/audit_logs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Administrative audit trail"
+    },
+    "/moderation_reports/{reportId}": {
+      "schema": "ModerationReport",
+      "description": "Trust & safety moderation reports"
     },
     "/reviews/{reviewId}": {
       "schema": "Review",
